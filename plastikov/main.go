@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -9,28 +10,40 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"time"
 )
 
 func main() {
-	file := Downloader{
-		URL: "https://z-library.se/dl/1246152/ea6aa2",
-		outputFile: "History of Africa.pdf",
-		Goroutines: 5,
-	}
+	// flag variables
+	url := flag.String("url", "", "URL of the file to download")
+	output := flag.String("output", "", "Name for the file to download")
+	numGoroutines := flag.Int("goroutines", 4, "Number of goroutines to spin when downloading file")
+	// retries := flag.Int("retry", 3, "Number of times to retry downloading file")
+	timeout := flag.Duration("timeout", 30, "Connection to timeout in 30 seconds")
 
-	err := file.startDownloader(); if err != nil{
-		log.Fatalf("%s", err)
-	}
+	flag.Parse()
 
-	fmt.Println("your file has been downloaded")
+	// validation for required flags
+	if *url == "" || *output == ""{
+		fmt.Println("Usage: go-batch-downloader -url <url-to-download-from> -output <output-file>")
+	}
+	// initialise download instance of the item
+	obj := Downloader{URL: *url, outputFile: *output, Goroutines: *numGoroutines, time: *timeout} //Retries: *retries, 
+
+	// download a chunk of the file and check for error
+	err := obj.startDownloader()
+	if err != nil{
+		log.Fatalf("error: download failed %s", err)
+	}
+	fmt.Println("100% ==> download succesful.")
 }
 
 type Downloader struct{
 	URL string
 	outputFile string
 	Goroutines int
+	time time.Duration
 }
-
 
 func(d *Downloader) startDownloader() error{
 	req, err := http.NewRequest("GET", d.URL, nil)
@@ -43,7 +56,25 @@ func(d *Downloader) startDownloader() error{
 		return fmt.Errorf("error: %s", err)
 	}
 
-	if headReq.StatusCode == http.StatusOK{
+	if headReq.StatusCode != http.StatusOK{
+		client := &http.Client{Timeout: d.time}
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("error: %s", err)
+		}
+		defer resp.Body.Close()
+
+		out, err := os.Create(d.outputFile)
+		if err != nil {
+			return fmt.Errorf("error: %s", err)
+		}
+		defer out.Close()
+
+		_, err = io.Copy(out, resp.Body)
+		if err != nil {
+			return fmt.Errorf("error: %s", err)
+		}
+	} else {
 		size := req.Header.Get("Content-length")
 		if size == "" {
 			return fmt.Errorf("error: Content-Length header is empty")
@@ -73,25 +104,29 @@ func(d *Downloader) startDownloader() error{
 			req.Header.Add("Range", rangeBytes)
 
 			go func() {
-				
 				buffer := make([]byte, chunk)
 				
-				resp, err := http.DefaultClient.Do(req)
+				client := &http.Client{Timeout: d.time}
+				resp, err := client.Do(req)
 				if err != nil{
-					fmt.Errorf("error: %s", err)
+					fmt.Printf("error: %s", err)
+					return
 				}
 				defer resp.Body.Close()
 				
-				buffer, err = io.ReadAll(resp.Body)
+				_, err = io.ReadFull(resp.Body, buffer)
 				if err != nil{
-					fmt.Errorf("error: %s", err)
+					fmt.Printf("error: %s", err)
+					return
 				}
 
 				fileBuffer.Write(buffer[:])
 				out, err := os.Create(d.outputFile)
 				if err != nil{
-					fmt.Errorf("error: %s", err)
+					fmt.Printf("error: %s", err)
+					return
 				}
+				defer out.Close()
 
 				io.Copy(out, &fileBuffer)
 
@@ -99,24 +134,6 @@ func(d *Downloader) startDownloader() error{
 			}()
 		}
 		wg.Wait()
-	} else {
-		// Fallback to downloading the entire file
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return fmt.Errorf("error: %s", err)
-		}
-		defer resp.Body.Close()
-
-		out, err := os.Create(d.outputFile)
-		if err != nil {
-			return fmt.Errorf("error: %s", err)
-		}
-		defer out.Close()
-
-		_, err = io.Copy(out, resp.Body)
-		if err != nil {
-			return fmt.Errorf("error: %s", err)
-		}
 	}
 	return nil
 }
