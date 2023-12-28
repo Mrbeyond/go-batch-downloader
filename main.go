@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	chunkSize int64 = 1 << 50
+	chunkSize int64 = 1 << 20 // 1MB
 	wg        sync.WaitGroup
 )
 
@@ -68,6 +68,9 @@ func downloadChunk(url string, start int64, end int64, chunkChn chan<- chunkResp
 
 	defer resp.Body.Close()
 	chunk, err := io.ReadAll(resp.Body)
+	fmt.Println("\n\n\n\n", resp.Request.Header.Get("Range"), "\t:\t", len(chunk), "\n\n\n\n\n ")
+
+	fmt.Println(resp.Header.Get("Accept-Ranges"), "\t accept", "\n\n\n ")
 
 	if err != nil {
 		chunkChn <- chunkResp{err: err}
@@ -85,15 +88,19 @@ func downloadFile(url, destination string) error {
 		return err
 	}
 
+	fmt.Println(fileSize, chunkSize)
+
 	totalChunks := fileSize / chunkSize
 	if fileSize%chunkSize != 0 {
 		totalChunks++
 	}
 
+	fmt.Println("Total chunks is: ", totalChunks, "\n\n\n ")
+
 	chunkChn := make(chan chunkResp, totalChunks)
 
 	for i := int64(0); i < totalChunks; i++ {
-		start := i * totalChunks
+		start := i * chunkSize
 		end := (i + 1) * chunkSize
 
 		// Check if the last available chunk  is less than the  chunkSize, see line 86
@@ -102,7 +109,7 @@ func downloadFile(url, destination string) error {
 		}
 
 		wg.Add(1)
-		fmt.Println(totalChunks, fileSize, "\n\n\n ")
+		fmt.Println(start, end, fileSize, "\n\n\n ")
 		go downloadChunk(url, start, end, chunkChn, &wg)
 	}
 
@@ -112,16 +119,17 @@ func downloadFile(url, destination string) error {
 	sortedChunks := make([][]byte, totalChunks)
 
 	for chunk := range chunkChn {
+		// fmt.Println("\n\n\n\n", chunk.index, "\t:\t", len(chunk.file), "\n\n\n\n\n ")
 		sortedChunks[chunk.index] = chunk.file
 	}
 
-	err = mergeChunks(destination, sortedChunks)
+	// err = mergeChunks(destination, sortedChunks)
 
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("Downloaded %s to %s\n", url, destination)
+	fmt.Printf("\n Downloaded %s to %s\n", url, destination)
 
 	return nil
 }
